@@ -37,7 +37,7 @@ Patches available here: https://github.com/dylanaraps/sowm/pulls
 | `MOD4` + `Right Mouse`     | resize window          |
 | `MOD4` + `f`               | maximize toggle        |
 | `MOD4` + `c`               | center window          |
-| `MOD4` + `q`               | kill window            |
+| `MOD4` + `w`               | kill window            |
 | `MOD4` + `1-6`             | desktop swap           |
 | `MOD4` + `Shift` +`1-6`    | send window to desktop |
 | `MOD1` + `TAB` (*alt-tab*) | focus cycle            |
@@ -46,10 +46,8 @@ Patches available here: https://github.com/dylanaraps/sowm/pulls
 
 | combo                    | action           | program        |
 | ------------------------ | ---------------- | -------------- |
-| `MOD4` + `Return`        | terminal         | `st`           |
-| `MOD4` + `d`             | dmenu            | `dmenu_run`    |
-| `MOD4` + `p`             | scrot            | `scr`          |
-| `MOD4` + `w`             | wallpaper cycler | `bud`          |
+| `MOD4` + `Return`        | terminal         | `alacritty`    |
+| `MOD4` + `r`             | dmenu            | `dmenu_run`    |
 | `XF86_AudioLowerVolume`  | volume down      | `amixer`       |
 | `XF86_AudioRaiseVolume`  | volume up        | `amixer`       |
 | `XF86_AudioMute`         | volume toggle    | `amixer`       |
