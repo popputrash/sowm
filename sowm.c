@@ -4,6 +4,7 @@
 #include <X11/XF86keysym.h>
 #include <X11/keysym.h>
 #include <X11/XKBlib.h>
+#include <X11/extensions/Xinerama.h>
 #include <stdlib.h>
 #include <signal.h>
 #include <unistd.h>
@@ -11,9 +12,10 @@
 #include "sowm.h"
 
 static client       *list = {0}, *ws_list[10] = {0}, *cur;
-static int          ws = 1, sw, sh, wx, wy, numlock = 0;
+static int          ws = 1, sw, sh, wx, wy, numlock = 0, monitors;
 static unsigned int ww, wh;
 
+static int           s;
 static Display      *d;
 static XButtonEvent mouse;
 static Window       root;
@@ -32,8 +34,27 @@ static void (*events[LASTEvent])(XEvent *e) = {
 
 #include "config.h"
 
+unsigned long getcolor(const char *col){
+  Colormap m = DefaultColormap(d, s);
+  XColor c;
+  return (!XAllocNamedColor(d, m, col , &c, &c))?0:c.pixel;
+
+}
+
 void win_focus(client *c) {
+    if(cur) XSetWindowBorder(d, cur->w, getcolor(BORDER_NORMAL));
     cur = c;
+
+    
+
+    if(cur->f){
+      XConfigureWindow(d, cur->w, CWBorderWidth, &(XWindowChanges){.border_width = 0});
+    }else{
+      XConfigureWindow(d, cur->w, CWBorderWidth, &(XWindowChanges){.border_width = BORDER_WIDTH});
+    }
+    
+    XSetWindowBorder(d, cur->w, getcolor(BORDER_SELECT));
+
     XSetInputFocus(d, cur->w, RevertToParent, CurrentTime);
 }
 
@@ -45,13 +66,13 @@ void notify_destroy(XEvent *e) {
 
 void notify_enter(XEvent *e) {
     while(XCheckTypedEvent(d, EnterNotify, e));
+    while(XCheckTypedWindowEvent(d, mouse.subwindow, MotionNotify, e));
 
     for win if (c->w == e->xcrossing.window) win_focus(c);
 }
 
 void notify_motion(XEvent *e) {
     if (!mouse.subwindow || cur->f) return;
-
     while(XCheckTypedEvent(d, MotionNotify, e));
 
     int xd = e->xbutton.x_root - mouse.x_root;
@@ -62,6 +83,8 @@ void notify_motion(XEvent *e) {
         wy + (mouse.button == 1 ? yd : 0),
         MAX(1, ww + (mouse.button == 3 ? xd : 0)),
         MAX(1, wh + (mouse.button == 3 ? yd : 0)));
+    
+    win_size(cur->w, &cur->wx, &cur->wy, &cur ->ww, &cur->wh);
 }
 
 void key_press(XEvent *e) {
@@ -73,12 +96,42 @@ void key_press(XEvent *e) {
             keys[i].function(keys[i].arg);
 }
 
-void button_press(XEvent *e) {
-    if (!e->xbutton.subwindow) return;
+int multimonitor_action (int action) { // action = 0 -> center; action = 1 -> fs
+    if (!XineramaIsActive(d)) return 1;
+    XineramaScreenInfo *si = XineramaQueryScreens(d, &monitors);
+    for (int i = 0; i < monitors; i++) {
+        if ((cur->wx + (cur->ww/2) >= (unsigned int)si[i].x_org
+                && cur->wx + (cur->ww/2) < (unsigned int)si[i].x_org + si[i].width)
+            && ( cur->wy + (cur->wh/2) >= (unsigned int)si[i].y_org
+                && cur->wy + (cur->wh/2) < (unsigned int)si[i].y_org + si[i].height)) {
+            if (action){
+              XMoveResizeWindow(d, cur->w,
+                                si[i].x_org, si[i].y_org,
+                                si[i].width, si[i].height);
+            }
 
+
+            else{
+              XMoveWindow(d, cur->w,
+                          si[i].x_org + ((si[i].width - ww)/2),
+                          si[i].y_org + ((si[i].height -wh)/2));
+            }
+
+            break;
+        }
+    }
+    return 0;
+}
+
+void button_press(XEvent *e) {
+    XAllowEvents(d, ReplayPointer, e->xbutton.time);
+    XSync(d, 0);
+    if (!e->xbutton.subwindow) return;
+    
     win_size(e->xbutton.subwindow, &wx, &wy, &ww, &wh);
     XRaiseWindow(d, e->xbutton.subwindow);
     mouse = e->xbutton;
+
 }
 
 void button_release(XEvent *e) {
@@ -105,6 +158,7 @@ void win_add(Window w) {
     }
 
     ws_save(ws);
+    win_focus(c);
 }
 
 void win_del(Window w) {
@@ -117,7 +171,7 @@ void win_del(Window w) {
     if (list == x)    list = x->next;
     if (x->next)      x->next->prev = x->prev;
     if (x->prev)      x->prev->next = x->next;
-
+    
     free(x);
     ws_save(ws);
 }
@@ -129,8 +183,12 @@ void win_kill(const Arg arg) {
 void win_center(const Arg arg) {
     if (!cur) return;
 
-    win_size(cur->w, &(int){0}, &(int){0}, &ww, &wh);
-    XMoveWindow(d, cur->w, (sw - ww) / 2, (sh - wh) / 2);
+    if (multimonitor_action(0))
+      XMoveWindow(d, cur->w, (sw - ww) / 2, (sh - wh) / 2);
+
+    win_size(cur->w, &cur->wx, &cur->wy, &cur->ww, &cur->wh);
+
+
 }
 
 void win_fs(const Arg arg) {
@@ -138,10 +196,13 @@ void win_fs(const Arg arg) {
 
     if ((cur->f = cur->f ? 0 : 1)) {
         win_size(cur->w, &cur->wx, &cur->wy, &cur->ww, &cur->wh);
-        XMoveResizeWindow(d, cur->w, 0, 0, sw, sh);
-
+        if (multimonitor_action(1)){
+          XMoveResizeWindow(d, cur->w, 0, 0 ,sw, sh);
+          win_focus(cur);
+        }
     } else {
         XMoveResizeWindow(d, cur->w, cur->wx, cur->wy, cur->ww, cur->wh);
+        win_focus(cur);
     }
 }
 
@@ -166,6 +227,7 @@ void win_prev(const Arg arg) {
     if (!cur) return;
 
     XRaiseWindow(d, cur->prev->w);
+
     win_focus(cur->prev);
 }
 
@@ -184,12 +246,15 @@ void ws_go(const Arg arg) {
     ws_save(ws);
     ws_sel(arg.i);
 
-    for win XMapWindow(d, c->w);
+    for win {
+      XMapWindow(d, c->w);
+    }
 
     ws_sel(tmp);
 
-    for win XUnmapWindow(d, c->w);
-
+    for win {
+      XUnmapWindow(d, c->w);
+    }
     ws_sel(arg.i);
 
     if (list) win_focus(list); else cur = 0;
@@ -244,6 +309,9 @@ void input_grab(Window root) {
     XModifierKeymap *modmap = XGetModifierMapping(d);
     KeyCode code;
 
+    XGrabButton(d, 1, AnyModifier, root, True, ButtonPressMask|ButtonReleaseMask,
+       GrabModeSync, GrabModeAsync, 0, 0);
+
     for (i = 0; i < 8; i++)
         for (int k = 0; k < modmap->max_keypermod; k++)
             if (modmap->modifiermap[i * modmap->max_keypermod + k]
@@ -260,7 +328,7 @@ void input_grab(Window root) {
 
     for (i = 1; i < 4; i += 2)
         for (j = 0; j < sizeof(modifiers)/sizeof(*modifiers); j++)
-            XGrabButton(d, i, MOD | modifiers[j], root, True,
+            XGrabButton(d, i, MOD | modifiers[j] , root, True,
                 ButtonPressMask|ButtonReleaseMask|PointerMotionMask,
                 GrabModeAsync, GrabModeAsync, 0, 0);
 
@@ -275,15 +343,15 @@ int main(void) {
     signal(SIGCHLD, SIG_IGN);
     XSetErrorHandler(xerror);
 
-    int s = DefaultScreen(d);
+    s = DefaultScreen(d);
     root  = RootWindow(d, s);
-    sw    = XDisplayWidth(d, s);
-    sh    = XDisplayHeight(d, s);
+    sw    = XDisplayWidth(d, s); //- (2*BORDER_WIDTH);
+    sh    = XDisplayHeight(d, s); //- (2*BORDER_WIDTH);
 
     XSelectInput(d,  root, SubstructureRedirectMask);
     XDefineCursor(d, root, XCreateFontCursor(d, 68));
     input_grab(root);
 
     while (1 && !XNextEvent(d, &ev)) // 1 && will forever be here.
-        if (events[ev.type]) events[ev.type](&ev);
-}
+      if (events[ev.type]) events[ev.type](&ev);
+  }
