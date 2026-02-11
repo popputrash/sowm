@@ -17,6 +17,7 @@ typedef struct {
     const char** com;
     const int i;
     const Window w;
+    const int side;
 } Arg;
 
 struct key {
@@ -28,10 +29,11 @@ struct key {
 
 typedef struct client {
     struct client *next, *prev;
-    int f, wx, wy;
+    int f, wx, wy, tiled;
     unsigned int ww, wh;
     unsigned char fs;
     Window w;
+    Bool istiled, isfloating;
 } client;
 
 int multimonitor_action(int action);
@@ -52,6 +54,7 @@ void win_add(Window w);
 void win_center(const Arg arg);
 void win_del(Window w);
 void win_fs(const Arg arg);
+void win_tile(const Arg arg);
 void win_focus(client *c);
 void win_kill(const Arg arg);
 void win_prev(const Arg arg);

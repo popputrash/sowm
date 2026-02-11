@@ -6,12 +6,13 @@
 #include <X11/XKBlib.h>
 #include <X11/extensions/Xinerama.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include <signal.h>
 #include <unistd.h>
 
 #include "sowm.h"
 
-static client       *list = {0}, *ws_list[10] = {0}, *cur;
+static client       *list = {0}, *ws_list[10] = {0}, *cur, *tiled_list = {0};
 static int          ws = 1, sw, sh, wx, wy, numlock = 0, monitors;
 static unsigned int ww, wh;
 
@@ -44,9 +45,7 @@ unsigned long getcolor(const char *col){
 void win_focus(client *c) {
     if(cur) XSetWindowBorder(d, cur->w, getcolor(BORDER_NORMAL));
     cur = c;
-
     
-
     if(cur->f){
       XConfigureWindow(d, cur->w, CWBorderWidth, &(XWindowChanges){.border_width = 0});
     }else{
@@ -72,7 +71,7 @@ void notify_enter(XEvent *e) {
 }
 
 void notify_motion(XEvent *e) {
-    if (!mouse.subwindow || cur->f) return;
+    if (!mouse.subwindow || cur->f || cur->istiled) return;
     while(XCheckTypedEvent(d, MotionNotify, e));
 
     int xd = e->xbutton.x_root - mouse.x_root;
@@ -188,7 +187,6 @@ void win_center(const Arg arg) {
 
     win_size(cur->w, &cur->wx, &cur->wy, &cur->ww, &cur->wh);
 
-
 }
 
 void win_fs(const Arg arg) {
@@ -202,8 +200,36 @@ void win_fs(const Arg arg) {
         }
     } else {
         XMoveResizeWindow(d, cur->w, cur->wx, cur->wy, cur->ww, cur->wh);
+        cur->isfloating = true;
         win_focus(cur);
     }
+}
+
+
+void win_tile(const Arg arg){
+		const int side = arg.side;
+  win_size(cur->w, &wx, &wy, &ww, &wh);
+  
+
+  if(!cur->istiled) {
+    if(side == 0){
+      XMoveResizeWindow(d, cur->w, 0, 0 + TILE_GAP + BORDER_WIDTH, 
+          sw / 2 - TILE_GAP * 2 - BORDER_WIDTH * 2, sh - TILE_GAP * 2 - BORDER_WIDTH * 2);
+    }else{
+      XMoveResizeWindow(d, cur->w, sw / 2 + TILE_GAP + BORDER_WIDTH, 0 + TILE_GAP + BORDER_WIDTH,
+          sw / 2 - TILE_GAP * 2 - BORDER_WIDTH * 2, sh - TILE_GAP * 2 - BORDER_WIDTH * 2);
+    }
+
+    cur->istiled = true;
+  }else{
+    XMoveResizeWindow(d, cur->w, cur->wx, cur->wy, cur->ww, cur->wh);
+    cur->istiled = false;
+  }
+
+        //list->prev->next = c;
+        //c->prev          = list->prev;
+        //list->prev       = c;
+        //c->next          = list;
 }
 
 void win_to_ws(const Arg arg) {
