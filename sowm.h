@@ -1,12 +1,12 @@
 #include <X11/Xlib.h>
 
-#define win        (client *t=0, *c=list; c && t!=list->prev; t=c, c=c->next)
-#define ws_save(W) ws_list[W] = list
-#define ws_sel(W)  list = ws_list[ws = W]
+#define FOR_EACH_CLIENT (client *_prev=0, *c=client_list; c && _prev!=client_list->prev; _prev=c, c=c->next)
+#define ws_save(W) ws_list[W] = client_list
+#define ws_sel(W)  client_list = ws_list[current_workspace = W]
 #define MAX(a, b)  ((a) > (b) ? (a) : (b))
 
-#define win_size(W, gx, gy, gw, gh) \
-    XGetGeometry(d, W, &(Window){0}, gx, gy, gw, gh, \
+#define win_size(W, out_x, out_y, out_w, out_h) \
+    XGetGeometry(display, W, &(Window){0}, out_x, out_y, out_w, out_h, \
                  &(unsigned int){0}, &(unsigned int){0})
 
 // Taken from DWM. Many thanks. https://git.suckless.org/dwm
@@ -14,9 +14,9 @@
         (ShiftMask|ControlMask|Mod1Mask|Mod2Mask|Mod3Mask|Mod4Mask|Mod5Mask))
 
 typedef struct {
-    const char** com;
-    const int i;
-    const Window w;
+    const char** command;
+    const int workspace;
+    const Window window;
     const int side;
 } Arg;
 
@@ -29,16 +29,16 @@ struct key {
 
 typedef struct client {
     struct client *next, *prev;
-    int f, wx, wy, tiled;
-    unsigned int ww, wh;
+    int fullscreen, saved_x, saved_y, tiled;
+    unsigned int saved_width, saved_height;
     unsigned char fs;
-    Window w;
+    Window window;
     Bool istiled, isfloating;
 } client;
 
 int multimonitor_action(int action);
 
-unsigned long getcolor(const char *col);
+unsigned long get_color(const char *color_name);
 void button_press(XEvent *e);
 void button_release(XEvent *e);
 void configure_request(XEvent *e);
@@ -49,13 +49,13 @@ void mapping_notify(XEvent *e);
 void notify_destroy(XEvent *e);
 void notify_enter(XEvent *e);
 void notify_motion(XEvent *e);
-void run(const Arg arg);
-void win_add(Window w);
+void spawn(const Arg arg);
+void win_add(Window window);
 void win_center(const Arg arg);
-void win_del(Window w);
-void win_fs(const Arg arg);
+void win_del(Window window);
+void win_fullscreen(const Arg arg);
 void win_tile(const Arg arg);
-void win_focus(client *c);
+void win_focus(client *target);
 void win_kill(const Arg arg);
 void win_prev(const Arg arg);
 void win_next(const Arg arg);

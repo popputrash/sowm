@@ -1,383 +1,386 @@
 // sowm - An itsy bitsy floating window manager.
 
-#include <X11/Xlib.h>
 #include <X11/XF86keysym.h>
-#include <X11/keysym.h>
 #include <X11/XKBlib.h>
+#include <X11/Xlib.h>
 #include <X11/extensions/Xinerama.h>
-#include <stdlib.h>
-#include <stdbool.h>
+#include <X11/keysym.h>
 #include <signal.h>
+#include <stdbool.h>
+#include <stdlib.h>
 #include <unistd.h>
 
 #include "sowm.h"
 
-static client       *list = {0}, *ws_list[10] = {0}, *cur, *tiled_list = {0};
-static int          ws = 1, sw, sh, wx, wy, numlock = 0, monitors;
-static unsigned int ww, wh;
+static client *client_list = {0}, *ws_list[10] = {0}, *focused;
+static int current_workspace = 1, screen_width, screen_height, drag_x, drag_y,
+           numlock = 0;
+static unsigned int drag_width, drag_height;
 
-static int           s;
-static Display      *d;
+static int screen;
+static Display *display;
 static XButtonEvent mouse;
-static Window       root;
+static Window root;
 
-static void (*events[LASTEvent])(XEvent *e) = {
-    [ButtonPress]      = button_press,
-    [ButtonRelease]    = button_release,
+static void (*event_handlers[LASTEvent])(XEvent *e) = {
+    [ButtonPress] = button_press,
+    [ButtonRelease] = button_release,
     [ConfigureRequest] = configure_request,
-    [KeyPress]         = key_press,
-    [MapRequest]       = map_request,
-    [MappingNotify]    = mapping_notify,
-    [DestroyNotify]    = notify_destroy,
-    [EnterNotify]      = notify_enter,
-    [MotionNotify]     = notify_motion
-};
+    [KeyPress] = key_press,
+    [MapRequest] = map_request,
+    [MappingNotify] = mapping_notify,
+    [DestroyNotify] = notify_destroy,
+    [EnterNotify] = notify_enter,
+    [MotionNotify] = notify_motion};
 
 #include "config.h"
 
-unsigned long getcolor(const char *col){
-  Colormap m = DefaultColormap(d, s);
-  XColor c;
-  return (!XAllocNamedColor(d, m, col , &c, &c))?0:c.pixel;
-
+unsigned long get_color(const char *color_name) {
+  Colormap colormap = DefaultColormap(display, screen);
+  XColor color;
+  return (!XAllocNamedColor(display, colormap, color_name, &color, &color))
+             ? 0
+             : color.pixel;
 }
 
-void win_focus(client *c) {
-    if(cur) XSetWindowBorder(d, cur->w, getcolor(BORDER_NORMAL));
-    cur = c;
-    
-    if(cur->f){
-      XConfigureWindow(d, cur->w, CWBorderWidth, &(XWindowChanges){.border_width = 0});
-    }else{
-      XConfigureWindow(d, cur->w, CWBorderWidth, &(XWindowChanges){.border_width = BORDER_WIDTH});
-    }
-    
-    XSetWindowBorder(d, cur->w, getcolor(BORDER_SELECT));
+void win_focus(client *target) {
+  if (focused)
+    XSetWindowBorder(display, focused->window, get_color(BORDER_NORMAL));
+  focused = target;
 
-    XSetInputFocus(d, cur->w, RevertToParent, CurrentTime);
+  if (focused->fullscreen) {
+    XConfigureWindow(display, focused->window, CWBorderWidth,
+                     &(XWindowChanges){.border_width = 0});
+  } else {
+    XConfigureWindow(display, focused->window, CWBorderWidth,
+                     &(XWindowChanges){.border_width = BORDER_WIDTH});
+  }
+
+  XSetWindowBorder(display, focused->window, get_color(BORDER_SELECT));
+
+  XSetInputFocus(display, focused->window, RevertToParent, CurrentTime);
 }
 
 void notify_destroy(XEvent *e) {
-    win_del(e->xdestroywindow.window);
+  win_del(e->xdestroywindow.window);
 
-    if (list) win_focus(list->prev);
+  if (client_list)
+    win_focus(client_list->prev);
 }
 
 void notify_enter(XEvent *e) {
-    while(XCheckTypedEvent(d, EnterNotify, e));
-    while(XCheckTypedWindowEvent(d, mouse.subwindow, MotionNotify, e));
+  while (XCheckTypedEvent(display, EnterNotify, e))
+    ;
+  while (XCheckTypedWindowEvent(display, mouse.subwindow, MotionNotify, e))
+    ;
 
-    for win if (c->w == e->xcrossing.window) win_focus(c);
+    for
+      FOR_EACH_CLIENT if (c->window == e->xcrossing.window) win_focus(c);
 }
 
 void notify_motion(XEvent *e) {
-    if (!mouse.subwindow || cur->f || cur->istiled) return;
-    while(XCheckTypedEvent(d, MotionNotify, e));
+  if (!mouse.subwindow || focused->fullscreen || focused->istiled)
+    return;
+  while (XCheckTypedEvent(display, MotionNotify, e))
+    ;
 
-    int xd = e->xbutton.x_root - mouse.x_root;
-    int yd = e->xbutton.y_root - mouse.y_root;
+  int delta_x = e->xbutton.x_root - mouse.x_root;
+  int delta_y = e->xbutton.y_root - mouse.y_root;
 
-    XMoveResizeWindow(d, mouse.subwindow,
-        wx + (mouse.button == 1 ? xd : 0),
-        wy + (mouse.button == 1 ? yd : 0),
-        MAX(1, ww + (mouse.button == 3 ? xd : 0)),
-        MAX(1, wh + (mouse.button == 3 ? yd : 0)));
-    
-    win_size(cur->w, &cur->wx, &cur->wy, &cur ->ww, &cur->wh);
+  XMoveResizeWindow(display, mouse.subwindow,
+                    drag_x + (mouse.button == 1 ? delta_x : 0),
+                    drag_y + (mouse.button == 1 ? delta_y : 0),
+                    MAX(1, drag_width + (mouse.button == 3 ? delta_x : 0)),
+                    MAX(1, drag_height + (mouse.button == 3 ? delta_y : 0)));
+
+  win_size(focused->window, &focused->saved_x, &focused->saved_y,
+           &focused->saved_width, &focused->saved_height);
 }
 
 void key_press(XEvent *e) {
-    KeySym keysym = XkbKeycodeToKeysym(d, e->xkey.keycode, 0, 0);
+  KeySym keysym = XkbKeycodeToKeysym(display, e->xkey.keycode, 0, 0);
 
-    for (unsigned int i=0; i < sizeof(keys)/sizeof(*keys); ++i)
-        if (keys[i].keysym == keysym &&
-            mod_clean(keys[i].mod) == mod_clean(e->xkey.state))
-            keys[i].function(keys[i].arg);
-}
-
-int multimonitor_action (int action) { // action = 0 -> center; action = 1 -> fs
-    if (!XineramaIsActive(d)) return 1;
-    XineramaScreenInfo *si = XineramaQueryScreens(d, &monitors);
-    for (int i = 0; i < monitors; i++) {
-        if ((cur->wx + (cur->ww/2) >= (unsigned int)si[i].x_org
-                && cur->wx + (cur->ww/2) < (unsigned int)si[i].x_org + si[i].width)
-            && ( cur->wy + (cur->wh/2) >= (unsigned int)si[i].y_org
-                && cur->wy + (cur->wh/2) < (unsigned int)si[i].y_org + si[i].height)) {
-            if (action){
-              XMoveResizeWindow(d, cur->w,
-                                si[i].x_org, si[i].y_org,
-                                si[i].width, si[i].height);
-            }
-
-
-            else{
-              XMoveWindow(d, cur->w,
-                          si[i].x_org + ((si[i].width - ww)/2),
-                          si[i].y_org + ((si[i].height -wh)/2));
-            }
-
-            break;
-        }
-    }
-    return 0;
+  for (unsigned int i = 0; i < sizeof(keys) / sizeof(*keys); ++i)
+    if (keys[i].keysym == keysym &&
+        mod_clean(keys[i].mod) == mod_clean(e->xkey.state))
+      keys[i].function(keys[i].arg);
 }
 
 void button_press(XEvent *e) {
-    XAllowEvents(d, ReplayPointer, e->xbutton.time);
-    XSync(d, 0);
-    if (!e->xbutton.subwindow) return;
-    
-    win_size(e->xbutton.subwindow, &wx, &wy, &ww, &wh);
-    XRaiseWindow(d, e->xbutton.subwindow);
-    mouse = e->xbutton;
+  XAllowEvents(display, ReplayPointer, e->xbutton.time);
+  XSync(display, 0);
+  if (!e->xbutton.subwindow)
+    return;
 
+  win_size(e->xbutton.subwindow, &drag_x, &drag_y, &drag_width, &drag_height);
+  XRaiseWindow(display, e->xbutton.subwindow);
+  mouse = e->xbutton;
 }
 
-void button_release(XEvent *e) {
-    mouse.subwindow = 0;
+void button_release(XEvent *e) { mouse.subwindow = 0; }
+
+void win_add(Window window) {
+  client *new_client;
+
+  if (!(new_client = (client *)calloc(1, sizeof(client))))
+    exit(1);
+
+  new_client->window = window;
+
+  if (client_list) {
+    client_list->prev->next = new_client;
+    new_client->prev = client_list->prev;
+    client_list->prev = new_client;
+    new_client->next = client_list;
+
+  } else {
+    client_list = new_client;
+    client_list->prev = client_list->next = client_list;
+  }
+
+  ws_save(current_workspace);
+  win_focus(new_client);
 }
 
-void win_add(Window w) {
-    client *c;
+void win_del(Window window) {
+  client *target = 0;
 
-    if (!(c = (client *) calloc(1, sizeof(client))))
-        exit(1);
+    for
+      FOR_EACH_CLIENT if (c->window == window) target = c;
 
-    c->w = w;
+    if (!client_list || !target)
+      return;
+    if (target->prev == target)
+      client_list = 0;
+    if (client_list == target)
+      client_list = target->next;
+    if (target->next)
+      target->next->prev = target->prev;
+    if (target->prev)
+      target->prev->next = target->next;
 
-    if (list) {
-        list->prev->next = c;
-        c->prev          = list->prev;
-        list->prev       = c;
-        c->next          = list;
-
-    } else {
-        list = c;
-        list->prev = list->next = list;
-    }
-
-    ws_save(ws);
-    win_focus(c);
-}
-
-void win_del(Window w) {
-    client *x = 0;
-
-    for win if (c->w == w) x = c;
-
-    if (!list || !x)  return;
-    if (x->prev == x) list = 0;
-    if (list == x)    list = x->next;
-    if (x->next)      x->next->prev = x->prev;
-    if (x->prev)      x->prev->next = x->next;
-    
-    free(x);
-    ws_save(ws);
+    free(target);
+    ws_save(current_workspace);
 }
 
 void win_kill(const Arg arg) {
-    if (cur) XKillClient(d, cur->w);
+  if (focused)
+    XKillClient(display, focused->window);
 }
 
 void win_center(const Arg arg) {
-    if (!cur) return;
+  if (!focused)
+    return;
 
-    if (multimonitor_action(0))
-      XMoveWindow(d, cur->w, (sw - ww) / 2, (sh - wh) / 2);
+  XMoveWindow(display, focused->window, (screen_width - drag_width) / 2,
+              (screen_height - drag_height) / 2);
 
-    win_size(cur->w, &cur->wx, &cur->wy, &cur->ww, &cur->wh);
-
+  win_size(focused->window, &focused->saved_x, &focused->saved_y,
+           &focused->saved_width, &focused->saved_height);
 }
 
-void win_fs(const Arg arg) {
-    if (!cur) return;
+void win_fullscreen(const Arg arg) {
+  if (!focused)
+    return;
 
-    if ((cur->f = cur->f ? 0 : 1)) {
-        win_size(cur->w, &cur->wx, &cur->wy, &cur->ww, &cur->wh);
-        if (multimonitor_action(1)){
-          XMoveResizeWindow(d, cur->w, 0, 0 ,sw, sh);
-          win_focus(cur);
-        }
-    } else {
-        XMoveResizeWindow(d, cur->w, cur->wx, cur->wy, cur->ww, cur->wh);
-        cur->isfloating = true;
-        win_focus(cur);
-    }
-}
-
-
-void win_tile(const Arg arg){
-		const int side = arg.side;
-  win_size(cur->w, &wx, &wy, &ww, &wh);
-  
-
-  if(!cur->istiled) {
-    if(side == 0){
-      XMoveResizeWindow(d, cur->w, 0, 0 + TILE_GAP + BORDER_WIDTH, 
-          sw / 2 - TILE_GAP * 2 - BORDER_WIDTH * 2, sh - TILE_GAP * 2 - BORDER_WIDTH * 2);
-    }else{
-      XMoveResizeWindow(d, cur->w, sw / 2 + TILE_GAP + BORDER_WIDTH, 0 + TILE_GAP + BORDER_WIDTH,
-          sw / 2 - TILE_GAP * 2 - BORDER_WIDTH * 2, sh - TILE_GAP * 2 - BORDER_WIDTH * 2);
-    }
-
-    cur->istiled = true;
-  }else{
-    XMoveResizeWindow(d, cur->w, cur->wx, cur->wy, cur->ww, cur->wh);
-    cur->istiled = false;
+  if ((focused->fullscreen = focused->fullscreen ? 0 : 1)) {
+    win_size(focused->window, &focused->saved_x, &focused->saved_y,
+             &focused->saved_width, &focused->saved_height);
+    XMoveResizeWindow(display, focused->window, 0, 0, screen_width,
+                      screen_height);
+  } else {
+    XMoveResizeWindow(display, focused->window, focused->saved_x,
+                      focused->saved_y, focused->saved_width,
+                      focused->saved_height);
+    focused->isfloating = true;
   }
+  win_focus(focused);
+}
 
-        //list->prev->next = c;
-        //c->prev          = list->prev;
-        //list->prev       = c;
-        //c->next          = list;
+void win_tile(const Arg arg) {
+  int n = 0, i = 0;
+  int master_width;
+        for
+          FOR_EACH_CLIENT { n++; }
+        if (!n)
+          return;
+        master_width = (n == 1) ? screen_width : screen_width / 2;
+        for
+          FOR_EACH_CLIENT {
+            int nx, ny, nw, nh;
+            if (i == 0) {
+              nx = 0;
+              ny = 0;
+              nw = master_width;
+              nh = screen_height;
+            } else {
+              nx = master_width;
+              nw = screen_width - master_width;
+              nh = screen_height / (n - 1);
+              ny = (i - 1) * nh;
+            }
+            XMoveResizeWindow(display, c->window, nx, ny, nw, nh);
+            i++;
+          }
 }
 
 void win_to_ws(const Arg arg) {
-    int tmp = ws;
+  int tmp = current_workspace;
 
-    if (arg.i == tmp) return;
+  if (arg.workspace == tmp)
+    return;
 
-    ws_sel(arg.i);
-    win_add(cur->w);
-    ws_save(arg.i);
+  ws_sel(arg.workspace);
+  win_add(focused->window);
+  ws_save(arg.workspace);
 
-    ws_sel(tmp);
-    win_del(cur->w);
-    XUnmapWindow(d, cur->w);
-    ws_save(tmp);
+  ws_sel(tmp);
+  win_del(focused->window);
+  XUnmapWindow(display, focused->window);
+  ws_save(tmp);
 
-    if (list) win_focus(list);
+  if (client_list)
+    win_focus(client_list);
 }
 
 void win_prev(const Arg arg) {
-    if (!cur) return;
+  if (!focused)
+    return;
 
-    XRaiseWindow(d, cur->prev->w);
+  XRaiseWindow(display, focused->prev->window);
 
-    win_focus(cur->prev);
+  win_focus(focused->prev);
 }
 
 void win_next(const Arg arg) {
-    if (!cur) return;
+  if (!focused)
+    return;
 
-    XRaiseWindow(d, cur->next->w);
-    win_focus(cur->next);
+  XRaiseWindow(display, focused->next->window);
+  win_focus(focused->next);
 }
 
 void ws_go(const Arg arg) {
-    int tmp = ws;
+  int tmp = current_workspace;
 
-    if (arg.i == ws) return;
+  if (arg.workspace == current_workspace)
+    return;
 
-    ws_save(ws);
-    ws_sel(arg.i);
+  ws_save(current_workspace);
+  ws_sel(arg.workspace);
 
-    for win {
-      XMapWindow(d, c->w);
-    }
+    for
+      FOR_EACH_CLIENT { XMapWindow(display, c->window); }
 
     ws_sel(tmp);
 
-    for win {
-      XUnmapWindow(d, c->w);
-    }
-    ws_sel(arg.i);
+    for
+      FOR_EACH_CLIENT { XUnmapWindow(display, c->window); }
+    ws_sel(arg.workspace);
 
-    if (list) win_focus(list); else cur = 0;
+    if (client_list)
+      win_focus(client_list);
+    else
+      focused = 0;
 }
 
 void configure_request(XEvent *e) {
-    XConfigureRequestEvent *ev = &e->xconfigurerequest;
+  XConfigureRequestEvent *ev = &e->xconfigurerequest;
 
-    XConfigureWindow(d, ev->window, ev->value_mask, &(XWindowChanges) {
-        .x          = ev->x,
-        .y          = ev->y,
-        .width      = ev->width,
-        .height     = ev->height,
-        .sibling    = ev->above,
-        .stack_mode = ev->detail
-    });
+  XConfigureWindow(display, ev->window, ev->value_mask,
+                   &(XWindowChanges){.x = ev->x,
+                                     .y = ev->y,
+                                     .width = ev->width,
+                                     .height = ev->height,
+                                     .sibling = ev->above,
+                                     .stack_mode = ev->detail});
 }
 
 void map_request(XEvent *e) {
-    Window w = e->xmaprequest.window;
+  Window window = e->xmaprequest.window;
 
-    XSelectInput(d, w, StructureNotifyMask|EnterWindowMask);
-    win_size(w, &wx, &wy, &ww, &wh);
-    win_add(w);
-    cur = list->prev;
+  XSelectInput(display, window, StructureNotifyMask | EnterWindowMask);
+  win_size(window, &drag_x, &drag_y, &drag_width, &drag_height);
+  win_add(window);
+  focused = client_list->prev;
 
-    if (wx + wy == 0) win_center((Arg){0});
+  if (drag_x + drag_y == 0)
+    win_center((Arg){0});
 
-    XMapWindow(d, w);
-    win_focus(list->prev);
+  XMapWindow(display, window);
+  win_focus(client_list->prev);
 }
 
 void mapping_notify(XEvent *e) {
-    XMappingEvent *ev = &e->xmapping;
+  XMappingEvent *ev = &e->xmapping;
 
-    if (ev->request == MappingKeyboard || ev->request == MappingModifier) {
-        XRefreshKeyboardMapping(ev);
-        input_grab(root);
-    }
+  if (ev->request == MappingKeyboard || ev->request == MappingModifier) {
+    XRefreshKeyboardMapping(ev);
+    input_grab(root);
+  }
 }
 
-void run(const Arg arg) {
-    if (fork()) return;
-    if (d) close(ConnectionNumber(d));
+void spawn(const Arg arg) {
+  if (fork())
+    return;
+  if (display)
+    close(ConnectionNumber(display));
 
-    setsid();
-    execvp((char*)arg.com[0], (char**)arg.com);
+  setsid();
+  execvp((char *)arg.command[0], (char **)arg.command);
 }
 
 void input_grab(Window root) {
-    unsigned int i, j, modifiers[] = {0, LockMask, numlock, numlock|LockMask};
-    XModifierKeymap *modmap = XGetModifierMapping(d);
-    KeyCode code;
+  unsigned int i, j, modifiers[] = {0, LockMask, numlock, numlock | LockMask};
+  XModifierKeymap *modmap = XGetModifierMapping(display);
+  KeyCode code;
 
-    XGrabButton(d, 1, AnyModifier, root, True, ButtonPressMask|ButtonReleaseMask,
-       GrabModeSync, GrabModeAsync, 0, 0);
+  XGrabButton(display, 1, AnyModifier, root, True,
+              ButtonPressMask | ButtonReleaseMask, GrabModeSync, GrabModeAsync,
+              0, 0);
 
-    for (i = 0; i < 8; i++)
-        for (int k = 0; k < modmap->max_keypermod; k++)
-            if (modmap->modifiermap[i * modmap->max_keypermod + k]
-                == XKeysymToKeycode(d, 0xff7f))
-                numlock = (1 << i);
+  for (i = 0; i < 8; i++)
+    for (int k = 0; k < modmap->max_keypermod; k++)
+      if (modmap->modifiermap[i * modmap->max_keypermod + k] ==
+          XKeysymToKeycode(display, 0xff7f))
+        numlock = (1 << i);
 
-    XUngrabKey(d, AnyKey, AnyModifier, root);
+  XUngrabKey(display, AnyKey, AnyModifier, root);
 
-    for (i = 0; i < sizeof(keys)/sizeof(*keys); i++)
-        if ((code = XKeysymToKeycode(d, keys[i].keysym)))
-            for (j = 0; j < sizeof(modifiers)/sizeof(*modifiers); j++)
-                XGrabKey(d, code, keys[i].mod | modifiers[j], root,
-                        True, GrabModeAsync, GrabModeAsync);
+  for (i = 0; i < sizeof(keys) / sizeof(*keys); i++)
+    if ((code = XKeysymToKeycode(display, keys[i].keysym)))
+      for (j = 0; j < sizeof(modifiers) / sizeof(*modifiers); j++)
+        XGrabKey(display, code, keys[i].mod | modifiers[j], root, True,
+                 GrabModeAsync, GrabModeAsync);
 
-    for (i = 1; i < 4; i += 2)
-        for (j = 0; j < sizeof(modifiers)/sizeof(*modifiers); j++)
-            XGrabButton(d, i, MOD | modifiers[j] , root, True,
-                ButtonPressMask|ButtonReleaseMask|PointerMotionMask,
-                GrabModeAsync, GrabModeAsync, 0, 0);
+  for (i = 1; i < 4; i += 2)
+    for (j = 0; j < sizeof(modifiers) / sizeof(*modifiers); j++)
+      XGrabButton(display, i, MOD | modifiers[j], root, True,
+                  ButtonPressMask | ButtonReleaseMask | PointerMotionMask,
+                  GrabModeAsync, GrabModeAsync, 0, 0);
 
-    XFreeModifiermap(modmap);
+  XFreeModifiermap(modmap);
 }
 
 int main(void) {
-    XEvent ev;
+  XEvent ev;
 
-    if (!(d = XOpenDisplay(0))) exit(1);
+  if (!(display = XOpenDisplay(0)))
+    exit(1);
 
-    signal(SIGCHLD, SIG_IGN);
-    XSetErrorHandler(xerror);
+  signal(SIGCHLD, SIG_IGN);
+  XSetErrorHandler(xerror);
 
-    s = DefaultScreen(d);
-    root  = RootWindow(d, s);
-    sw    = XDisplayWidth(d, s); //- (2*BORDER_WIDTH);
-    sh    = XDisplayHeight(d, s); //- (2*BORDER_WIDTH);
+  screen = DefaultScreen(display);
+  root = RootWindow(display, screen);
+  screen_width = XDisplayWidth(display, screen);   //- (2*BORDER_WIDTH);
+  screen_height = XDisplayHeight(display, screen); //- (2*BORDER_WIDTH);
 
-    XSelectInput(d,  root, SubstructureRedirectMask);
-    XDefineCursor(d, root, XCreateFontCursor(d, 68));
-    input_grab(root);
+  XSelectInput(display, root, SubstructureRedirectMask);
+  XDefineCursor(display, root, XCreateFontCursor(display, 68));
+  input_grab(root);
 
-    while (1 && !XNextEvent(d, &ev)) // 1 && will forever be here.
-      if (events[ev.type]) events[ev.type](&ev);
-  }
+  while (1 && !XNextEvent(display, &ev)) // 1 && will forever be here.
+    if (event_handlers[ev.type])
+      event_handlers[ev.type](&ev);
+}
