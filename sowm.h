@@ -48,6 +48,7 @@ void map_request(XEvent *e);
 void mapping_notify(XEvent *e);
 void notify_destroy(XEvent *e);
 void notify_enter(XEvent *e);
+void notify_unmap(XEvent *e);
 void notify_motion(XEvent *e);
 void spawn(const Arg arg);
 void win_add(Window window);

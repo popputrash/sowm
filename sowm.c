@@ -14,7 +14,7 @@
 
 static client *client_list = {0}, *ws_list[10] = {0}, *focused;
 static int current_workspace = 1, screen_width, screen_height, drag_x, drag_y,
-           numlock = 0;
+           numlock = 0, ws_switching = 0;
 static unsigned int drag_width, drag_height;
 
 static int screen;
@@ -31,7 +31,8 @@ static void (*event_handlers[LASTEvent])(XEvent *e) = {
     [MappingNotify] = mapping_notify,
     [DestroyNotify] = notify_destroy,
     [EnterNotify] = notify_enter,
-    [MotionNotify] = notify_motion};
+    [MotionNotify] = notify_motion,
+		[UnmapNotify] = notify_unmap};
 
 #include "config.h"
 
@@ -64,8 +65,23 @@ void win_focus(client *target) {
 void notify_destroy(XEvent *e) {
   win_del(e->xdestroywindow.window);
 
-  if (client_list)
+  if (client_list){
     win_focus(client_list->prev);
+	}else{
+		focused = 0;
+	}
+}
+
+void notify_unmap(XEvent *e){
+	if(ws_switching)return;
+	
+	win_del(e->xunmap.window);
+
+  if (client_list){
+    win_focus(client_list->prev);
+	}else{
+		focused = 0;
+	}
 }
 
 void notify_enter(XEvent *e) {
@@ -230,6 +246,7 @@ void win_to_ws(const Arg arg) {
   if (arg.workspace == tmp)
     return;
 
+	ws_switching = 1;
   ws_sel(arg.workspace);
   win_add(focused->window);
   ws_save(arg.workspace);
@@ -238,7 +255,7 @@ void win_to_ws(const Arg arg) {
   win_del(focused->window);
   XUnmapWindow(display, focused->window);
   ws_save(tmp);
-
+	ws_switching = 0;
   if (client_list)
     win_focus(client_list);
 }
@@ -265,7 +282,7 @@ void ws_go(const Arg arg) {
 
   if (arg.workspace == current_workspace)
     return;
-
+	ws_switching = 1;
   ws_save(current_workspace);
   ws_sel(arg.workspace);
 
@@ -277,7 +294,7 @@ void ws_go(const Arg arg) {
     for
       FOR_EACH_CLIENT { XUnmapWindow(display, c->window); }
     ws_sel(arg.workspace);
-
+		ws_switching = 0;
     if (client_list)
       win_focus(client_list);
     else
@@ -298,7 +315,12 @@ void configure_request(XEvent *e) {
 
 void map_request(XEvent *e) {
   Window window = e->xmaprequest.window;
-
+	for FOR_EACH_CLIENT
+		if (c->window == window){
+			XMapWindow(display, window);
+			win_focus(c);
+			return;
+		}
   XSelectInput(display, window, StructureNotifyMask | EnterWindowMask);
   win_size(window, &drag_x, &drag_y, &drag_width, &drag_height);
   win_add(window);
