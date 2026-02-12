@@ -32,7 +32,7 @@ static void (*event_handlers[LASTEvent])(XEvent *e) = {
     [DestroyNotify] = notify_destroy,
     [EnterNotify] = notify_enter,
     [MotionNotify] = notify_motion,
-		[UnmapNotify] = notify_unmap};
+    [UnmapNotify] = notify_unmap};
 
 #include "config.h"
 
@@ -65,23 +65,24 @@ void win_focus(client *target) {
 void notify_destroy(XEvent *e) {
   win_del(e->xdestroywindow.window);
 
-  if (client_list){
+  if (client_list) {
     win_focus(client_list->prev);
-	}else{
-		focused = 0;
-	}
+  } else {
+    focused = 0;
+  }
 }
 
-void notify_unmap(XEvent *e){
-	if(ws_switching)return;
-	
-	win_del(e->xunmap.window);
+void notify_unmap(XEvent *e) {
+  if (ws_switching)
+    return;
 
-  if (client_list){
+  win_del(e->xunmap.window);
+
+  if (client_list) {
     win_focus(client_list->prev);
-	}else{
-		focused = 0;
-	}
+  } else {
+    focused = 0;
+  }
 }
 
 void notify_enter(XEvent *e) {
@@ -216,28 +217,44 @@ void win_fullscreen(const Arg arg) {
 void win_tile(const Arg arg) {
   int n = 0, i = 0;
   int master_width;
-        for
-          FOR_EACH_CLIENT { n++; }
-        if (!n)
-          return;
-        master_width = (n == 1) ? screen_width : screen_width / 2;
+  int g = TILE_GAP;
+  int bw = BORDER_WIDTH;
+
+    for
+      FOR_EACH_CLIENT { n++; }
+    if (!n)
+      return;
+
+    if (n == 1) {
         for
           FOR_EACH_CLIENT {
-            int nx, ny, nw, nh;
-            if (i == 0) {
-              nx = 0;
-              ny = 0;
-              nw = master_width;
-              nh = screen_height;
-            } else {
-              nx = master_width;
-              nw = screen_width - master_width;
-              nh = screen_height / (n - 1);
-              ny = (i - 1) * nh;
-            }
-            XMoveResizeWindow(display, c->window, nx, ny, nw, nh);
-            i++;
+            XMoveResizeWindow(display, c->window, g, g,
+                              screen_width - 2 * (g + bw),
+                              screen_height - 2 * (g + bw));
           }
+        return;
+    }
+
+    master_width = screen_width / 2;
+    for
+      FOR_EACH_CLIENT {
+        int nx, ny, nw, nh;
+        if (i == 0) {
+          nx = g;
+          ny = g;
+          nw = master_width - g - g / 2 - 2 * bw;
+          nh = screen_height - 2 * (g + bw);
+        } else {
+          int total = screen_height - 2 * g - (n - 2) * g - (n - 1) * 2 * bw;
+          int stack_h = total / (n - 1);
+          nx = master_width + g / 2;
+          ny = g + (i - 1) * (stack_h + g + 2 * bw);
+          nw = screen_width - master_width - g - g / 2 - 2 * bw;
+          nh = stack_h;
+        }
+        XMoveResizeWindow(display, c->window, nx, ny, nw, nh);
+        i++;
+      }
 }
 
 void win_to_ws(const Arg arg) {
@@ -246,7 +263,7 @@ void win_to_ws(const Arg arg) {
   if (arg.workspace == tmp)
     return;
 
-	ws_switching = 1;
+  ws_switching = 1;
   ws_sel(arg.workspace);
   win_add(focused->window);
   ws_save(arg.workspace);
@@ -255,7 +272,7 @@ void win_to_ws(const Arg arg) {
   win_del(focused->window);
   XUnmapWindow(display, focused->window);
   ws_save(tmp);
-	ws_switching = 0;
+  ws_switching = 0;
   if (client_list)
     win_focus(client_list);
 }
@@ -282,7 +299,7 @@ void ws_go(const Arg arg) {
 
   if (arg.workspace == current_workspace)
     return;
-	ws_switching = 1;
+  ws_switching = 1;
   ws_save(current_workspace);
   ws_sel(arg.workspace);
 
@@ -294,7 +311,7 @@ void ws_go(const Arg arg) {
     for
       FOR_EACH_CLIENT { XUnmapWindow(display, c->window); }
     ws_sel(arg.workspace);
-		ws_switching = 0;
+    ws_switching = 0;
     if (client_list)
       win_focus(client_list);
     else
@@ -315,22 +332,23 @@ void configure_request(XEvent *e) {
 
 void map_request(XEvent *e) {
   Window window = e->xmaprequest.window;
-	for FOR_EACH_CLIENT
-		if (c->window == window){
-			XMapWindow(display, window);
-			win_focus(c);
-			return;
-		}
-  XSelectInput(display, window, StructureNotifyMask | EnterWindowMask);
-  win_size(window, &drag_x, &drag_y, &drag_width, &drag_height);
-  win_add(window);
-  focused = client_list->prev;
+        for
+          FOR_EACH_CLIENT
+        if (c->window == window) {
+          XMapWindow(display, window);
+          win_focus(c);
+          return;
+        }
+        XSelectInput(display, window, StructureNotifyMask | EnterWindowMask);
+        win_size(window, &drag_x, &drag_y, &drag_width, &drag_height);
+        win_add(window);
+        focused = client_list->prev;
 
-  if (drag_x + drag_y == 0)
-    win_center((Arg){0});
+        if (drag_x + drag_y == 0)
+          win_center((Arg){0});
 
-  XMapWindow(display, window);
-  win_focus(client_list->prev);
+        XMapWindow(display, window);
+        win_focus(client_list->prev);
 }
 
 void mapping_notify(XEvent *e) {
